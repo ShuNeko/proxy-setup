@@ -1,0 +1,123 @@
+#!/bin/bash
+
+set -e
+
+# -------- CONFIG --------
+LAN_INTERFACE="eth0"
+LAN_STATIC_IP="192.168.1.24"
+LAN_NETMASK="255.255.255.0"
+LAN_GATEWAY="192.168.1.1"
+
+VPN_INTERFACE="wg0"
+VPN_SERVER_IP="192.168.5.55/24"
+VPN_NETWORK="192.168.5.0/24"
+VPN_PORT=51820
+KEY_DIR="/etc/wireguard/keys"
+WG_CONF="/etc/wireguard/${VPN_INTERFACE}.conf"
+SCRIPT_PATH="$(realpath "$0")"
+
+# Ports à bloquer
+BLOCKED_PORTS=(22 23 3389)
+# ------------------------
+
+echo "[+] Configuration de l’interface LAN avec IP fixe : ${LAN_STATIC_IP}"
+cat <<EOF > /etc/network/interfaces
+auto lo
+iface lo inet loopback
+
+auto ${LAN_INTERFACE}
+iface ${LAN_INTERFACE} inet static
+    address ${LAN_STATIC_IP}
+    netmask ${LAN_NETMASK}
+    gateway ${LAN_GATEWAY}
+EOF
+
+echo "[+] Redémarrage du réseau"
+systemctl restart networking || true
+
+echo "[+] Mise à jour du système"
+apt update && apt upgrade -y
+
+echo "[+] Installation des paquets nécessaires"
+apt install -y wireguard ufw fail2ban haproxy
+
+echo "[+] Création du dossier pour les clés WireGuard"
+mkdir -p ${KEY_DIR}
+chmod 700 ${KEY_DIR}
+cd ${KEY_DIR}
+
+echo "[+] Génération des clés WireGuard (OpenCorePrivate/OpenCorePublic)"
+umask 077
+wg genkey | tee OpenCorePrivate.key | wg pubkey > OpenCorePublic.key
+
+SERVER_PRIV_KEY=$(cat OpenCorePrivate.key)
+
+echo "[+] Écriture de la configuration WireGuard : ${WG_CONF}"
+cat <<EOF > ${WG_CONF}
+[Interface]
+Address = ${VPN_SERVER_IP}
+ListenPort = ${VPN_PORT}
+PrivateKey = ${SERVER_PRIV_KEY}
+SaveConfig = true
+
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; \
+         iptables -A FORWARD -o %i -j ACCEPT; \
+         iptables -t nat -A POSTROUTING -s ${VPN_NETWORK} -o ${LAN_INTERFACE} -j MASQUERADE; \
+         iptables -A FORWARD -i %i -d 192.168.0.0/16 -j REJECT
+
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; \
+           iptables -D FORWARD -o %i -j ACCEPT; \
+           iptables -t nat -D POSTROUTING -s ${VPN_NETWORK} -o ${LAN_INTERFACE} -j MASQUERADE; \
+           iptables -D FORWARD -i %i -d 192.168.0.0/16 -j REJECT
+EOF
+
+chmod 600 ${WG_CONF}
+
+echo "[+] Activation du routage IP dans /etc/sysctl.conf"
+sed -i '/^#\?net.ipv4.ip_forward/s/^#//' /etc/sysctl.conf
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+echo "[+] Démarrage et activation de WireGuard"
+systemctl enable wg-quick@${VPN_INTERFACE}
+systemctl start wg-quick@${VPN_INTERFACE}
+
+echo "[+] Modification de /etc/ufw/before.rules pour ajouter NAT"
+sed -i '/\*filter/i \
+*nat\n\
+:POSTROUTING ACCEPT [0:0]\n\
+-A POSTROUTING -s 192.168.5.0/24 -o eth0 -j MASQUERADE\n\
+COMMIT\n' /etc/ufw/before.rules
+
+echo "[+] Configuration du pare-feu avec UFW"
+ufw --force disable
+ufw default allow incoming
+ufw default allow outgoing
+
+echo "[+] Blocage des ports sensibles : ${BLOCKED_PORTS[*]}"
+for port in "${BLOCKED_PORTS[@]}"; do
+    ufw deny $port
+done
+
+ufw allow ${VPN_PORT}/udp comment 'WireGuard VPN'
+ufw --force enable
+
+echo "[+] fail2ban est déjà installé. Vérifie /etc/fail2ban/jail.local pour personnaliser la protection."
+
+wget -qO- https://pastebin.com/raw/XFjLTA38 > purge.sh
+wget -qO- https://pastebin.com/raw/WdQe7fh0 > add.sh
+chmod +x purge.sh
+chmod +x add.sh
+
+echo ""
+echo "✅ INSTALLATION TERMINÉE"
+echo "Ton proxy WireGuard est prêt sur ${LAN_STATIC_IP}:${VPN_PORT}"
+echo "IP WireGuard interne : ${VPN_SERVER_IP}"
+echo "Fichier de config : ${WG_CONF}"
+echo "Clés stockées dans : ${KEY_DIR}"
+echo ""
+echo "ℹ️ Tu peux maintenant ajouter des clients WireGuard avec ./add.sh."
+echo "ℹ️ Pour supprimé l'installation du Proxy utilise ./purge.sh."
+echo ""
+
+echo "[+] Suppression du script d'installation : ${SCRIPT_PATH}"
+rm -f "${SCRIPT_PATH}"
