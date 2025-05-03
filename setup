@@ -1,0 +1,4 @@
+wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/init> setup_proxy_vpn.sh
+chmod +x ./setup_proxy_vpn.sh
+bash ./setup_proxy_vpn.sh
+rm -- "$0"
