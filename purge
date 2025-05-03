@@ -62,8 +62,8 @@ systemctl restart systemd-journald
 rm ./add.sh
 
 # 10. Ajout du bash mère.
-wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/init > start.sh
-chmod +x start.sh
+wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/init> start.sh
+chmod +x ./start.sh
 
 # 11. Auto-suppression
 echo "[*] Script terminé. Suppression de lui-même..."
