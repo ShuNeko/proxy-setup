@@ -103,10 +103,11 @@ ufw --force enable
 
 echo "[+] fail2ban est déjà installé. Vérifie /etc/fail2ban/jail.local pour personnaliser la protection."
 
-wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/purge > purge.sh
-wget -qO- https://pastebin.com/raw/WdQe7fh0 > add.sh
-chmod +x purge.sh
-chmod +x add.sh
+echo "[+] Debut de la creation des raccourcis de purge, et d'ajouts"
+wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/purge> purge.sh
+wget -qO- https://pastebin.com/raw/WdQe7fh0> add.sh
+chmod +x ./purge.sh
+chmod +x ./add.sh
 
 echo ""
 echo "✅ INSTALLATION TERMINÉE"
@@ -116,7 +117,7 @@ echo "Fichier de config : ${WG_CONF}"
 echo "Clés stockées dans : ${KEY_DIR}"
 echo ""
 echo "ℹ️ Tu peux maintenant ajouter des clients WireGuard avec ./add.sh."
-echo "ℹ️ Pour supprimé l'installation du Proxy utilise ./purge.sh."
+echo "🛑 Pour supprimé l'installation du Proxy utilise ./purge.sh."
 echo ""
 
 echo "[+] Suppression du script d'installation : ${SCRIPT_PATH}"
