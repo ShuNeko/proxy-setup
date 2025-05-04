@@ -103,12 +103,6 @@ ufw --force enable
 
 echo "[+] fail2ban est déjà installé. Vérifie /etc/fail2ban/jail.local pour personnaliser la protection."
 
-echo "[+] Debut de la creation des raccourcis de purge, et d'ajouts"
-wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/purge> purge.sh
-wget -qO- https://pastebin.com/raw/WdQe7fh0> add.sh
-chmod +x ./purge.sh
-chmod +x ./add.sh
-
 echo ""
 echo "✅ INSTALLATION TERMINÉE"
 echo "Ton proxy WireGuard est prêt sur ${LAN_STATIC_IP}:${VPN_PORT}"
