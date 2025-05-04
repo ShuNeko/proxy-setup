@@ -79,4 +79,5 @@ chmod +x ./start.sh
 
 # 11. Auto-suppression
 echo "[*] Script terminé. Suppression de lui-même..."
+rm ./add.sh
 rm -- "$0"
