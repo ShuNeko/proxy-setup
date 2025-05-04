@@ -41,6 +41,9 @@ apt update && apt upgrade -y
 echo "[+] Installation des paquets nécessaires"
 apt install -y wireguard ufw fail2ban haproxy
 
+echo "[+] Installation de iptables-persistent pour rendre les règles durables"
+DEBIAN_FRONTEND=noninteractive apt install -y iptables-persistent
+
 echo "[+] Création du dossier pour les clés WireGuard"
 mkdir -p ${KEY_DIR}
 chmod 700 ${KEY_DIR}
@@ -81,6 +84,10 @@ echo "[+] Démarrage et activation de WireGuard"
 systemctl enable wg-quick@${VPN_INTERFACE}
 systemctl start wg-quick@${VPN_INTERFACE}
 
+echo "[+] Sauvegarde des règles iptables pour persistance"
+iptables-save > /etc/iptables/rules.v4
+ip6tables-save > /etc/iptables/rules.v6
+
 echo "[+] Modification de /etc/ufw/before.rules pour ajouter NAT"
 sed -i '/\*filter/i \
 *nat\n\
@@ -116,3 +123,4 @@ echo ""
 
 echo "[+] Suppression du script d'installation : ${SCRIPT_PATH}"
 rm -f "${SCRIPT_PATH}"
+
