@@ -74,8 +74,15 @@ EOF
 chmod 600 ${WG_CONF}
 
 echo "[+] Activation du routage IP dans /etc/sysctl.conf"
-sed -i '/^#\?net.ipv4.ip_forward/s/^#//' /etc/sysctl.conf
-echo 1 > /proc/sys/net/ipv4/ip_forward
+grep -q '^net.ipv4.ip_forward' /etc/sysctl.conf && \
+    sed -i 's/^net.ipv4.ip_forward.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf || \
+    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
+
+echo "[+] Application immédiate du routage IP"
+sysctl -w net.ipv4.ip_forward=1
+
+echo "[+] Modification de /etc/default/ufw pour autoriser le forwarding"
+sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 
 echo "[+] Démarrage et activation de WireGuard"
 systemctl enable wg-quick@${VPN_INTERFACE}
@@ -99,7 +106,12 @@ for port in "${BLOCKED_PORTS[@]}"; do
 done
 
 ufw allow ${VPN_PORT}/udp comment 'WireGuard VPN'
+
+echo "[+] Réactivation propre du pare-feu"
 ufw --force enable
+
+echo "[+] Redémarrage de WireGuard pour appliquer tous les changements"
+systemctl restart wg-quick@${VPN_INTERFACE}
 
 echo "[+] fail2ban est déjà installé. Vérifie /etc/fail2ban/jail.local pour personnaliser la protection."
 
