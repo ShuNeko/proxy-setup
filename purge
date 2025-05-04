@@ -2,67 +2,79 @@
 
 set -e
 
-echo "[*] Lancement du script de purge totale (WireGuard, UFW, iptables, HAProxy)..."
+# -------- CONFIG --------
+LAN_INTERFACE="eth0"
+VPN_INTERFACE="wg0"
+VPN_NETWORK="192.168.5.0/24"
+VPN_PORT=51820
+KEY_DIR="/etc/wireguard/keys"
+WG_CONF="/etc/wireguard/${VPN_INTERFACE}.conf"
+# ------------------------
 
-# 1. Stopper services
-systemctl stop ufw.service wg-quick@wg0.service haproxy 2>/dev/null || true
-systemctl stop system-wg\x2dquick.slice 2>/dev/null || true
+echo "[!] ATTENTION : Ce script va supprimer toutes les configurations liées au VPN Proxy WireGuard."
+read -p "Continuer ? (y/N): " confirm
+[[ "$confirm" != "y" && "$confirm" != "Y" ]] && echo "Annulé." && exit 1
 
-# 2. Désactiver les services
-systemctl disable ufw.service wg-quick@wg0.service haproxy 2>/dev/null || true
+echo "[+] Arrêt du service WireGuard"
+systemctl stop wg-quick@${VPN_INTERFACE} || true
+systemctl disable wg-quick@${VPN_INTERFACE} || true
 
-# 3. Purge des paquets
-apt-get purge -y wireguard wireguard-tools wireguard-dkms linux-headers-$(uname -r)
-apt-get purge -y ufw iptables iptables-persistent netfilter-persistent
-apt-get purge -y haproxy
-apt-get autoremove --purge -y
-apt-get clean
+echo "[+] Suppression du fichier de configuration WireGuard"
+rm -f "${WG_CONF}"
 
-# 4. Suppression de fichiers de configuration et de services
-rm -rf /etc/wireguard /usr/src/wireguard* /var/log/wireguard*
-rm -f /etc/systemd/system/wg-quick@*.service /lib/systemd/system/wg-quick@*.service
-rm -rf /etc/ufw /lib/ufw /etc/default/ufw /etc/init.d/ufw /var/log/ufw*
-rm -rf /etc/iptables /etc/iptables-up.rules /etc/network/if-pre-up.d/iptables
-rm -rf /etc/iptables/rules.v4 /etc/iptables/rules.v6
-rm -f /etc/systemd/system/netfilter-persistent.service /lib/systemd/system/netfilter-persistent.service
+echo "[+] Suppression des clés WireGuard"
+rm -rf "${KEY_DIR}"
 
-rm -rf /etc/haproxy /var/lib/haproxy /var/log/haproxy*
-rm -f /etc/default/haproxy /etc/init.d/haproxy
-rm -f /etc/systemd/system/haproxy.service /lib/systemd/system/haproxy.service
+echo "[+] Suppression des règles iptables"
+iptables -D FORWARD -i ${VPN_INTERFACE} -j ACCEPT || true
+iptables -D FORWARD -o ${VPN_INTERFACE} -j ACCEPT || true
+iptables -t nat -D POSTROUTING -s ${VPN_NETWORK} -o ${LAN_INTERFACE} -j MASQUERADE || true
+iptables -D FORWARD -i ${VPN_INTERFACE} -d 192.168.0.0/16 -j REJECT || true
 
-# 5. Réinitialisation des règles iptables
-iptables -F
-iptables -X
-iptables -t nat -F
-iptables -t nat -X
-iptables -t mangle -F
-iptables -t mangle -X
-iptables -t raw -F
-iptables -t raw -X
-iptables -t security -F
-iptables -t security -X
+echo "[+] Nettoyage des règles UFW (NAT)"
+sed -i "/-A POSTROUTING -s ${VPN_NETWORK//\//\\/} -o ${LAN_INTERFACE} -j MASQUERADE/d" /etc/ufw/before.rules
+sed -i '/\*nat/,/COMMIT/d' /etc/ufw/before.rules
 
-# 6. Suppression des slices et unités résiduelles
-rm -rf /etc/systemd/system/system-wg\x2dquick.slice
-rm -rf /run/systemd/system/system-wg\x2dquick.slice
-rm -rf /run/systemd/generator/*
-rm -rf /var/log/journal/*
+echo "[+] Suppression de la règle UFW pour WireGuard"
+ufw delete allow ${VPN_PORT}/udp || true
 
-# 7. Rechargement de systemd
-systemctl daemon-reexec
-systemctl daemon-reload
-systemctl reset-failed
+echo "[+] Réinitialisation UFW"
+ufw --force reset
 
-# 8. Suppression journaux
-journalctl --rotate
-journalctl --vacuum-time=1s --quiet
-systemctl restart systemd-journald
+echo "[+] Réinstallation des valeurs par défaut dans /etc/network/interfaces"
+cat <<EOF > /etc/network/interfaces
+auto lo
+iface lo inet loopback
 
-# 9. Suppressions du add
-rm ./add.sh
+auto ${LAN_INTERFACE}
+iface ${LAN_INTERFACE} inet dhcp
+EOF
+
+echo "[+] Redémarrage du réseau"
+systemctl restart networking || true
+
+echo "[+] Suppression des paquets installés"
+apt purge -y wireguard ufw iptables-persistent fail2ban haproxy
+apt autoremove -y
+apt clean
+
+echo "[+] Suppression des fichiers restants"
+rm -rf /etc/wireguard
+rm -f /etc/iptables/rules.v4
+rm -f /etc/iptables/rules.v6
+rm -rf /var/log/fail2ban
+rm -rf /etc/fail2ban
+
+echo "[+] Réactivation des règles par défaut"
+sed -i '/^net.ipv4.ip_forward/s/1/0/' /etc/sysctl.conf
+echo 0 > /proc/sys/net/ipv4/ip_forward
+
+echo ""
+echo "✅ PURGE TERMINÉE"
+echo "Le système est revenu à l'état initial. Le VPN proxy a été supprimé."
 
 # 10. Ajout du bash mère.
-wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/init> start.sh
+wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/setup> start.sh
 chmod +x ./start.sh
 
 # 11. Auto-suppression
