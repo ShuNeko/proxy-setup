@@ -18,19 +18,7 @@ SCRIPT_PATH="$(realpath "$0")"
 
 # Ports à bloquer
 BLOCKED_PORTS=(22 23 3389)
-REQUIRED_PACKAGES=(wireguard ufw fail2ban haproxy iptables-persistent)
 # ------------------------
-
-echo "[+] Vérification et installation des paquets nécessaires"
-apt update
-for pkg in "${REQUIRED_PACKAGES[@]}"; do
-    if ! dpkg -s "$pkg" &>/dev/null; then
-        echo "    - Installation de $pkg"
-        DEBIAN_FRONTEND=noninteractive apt install -y "$pkg"
-    else
-        echo "    - $pkg est déjà installé"
-    fi
-done
 
 echo "[+] Configuration de l’interface LAN avec IP fixe : ${LAN_STATIC_IP}"
 cat <<EOF > /etc/network/interfaces
@@ -46,6 +34,12 @@ EOF
 
 echo "[+] Redémarrage du réseau"
 systemctl restart networking || true
+
+echo "[+] Mise à jour du système"
+apt update && apt upgrade -y
+
+echo "[+] Installation des paquets nécessaires"
+apt install -y wireguard ufw fail2ban haproxy
 
 echo "[+] Création du dossier pour les clés WireGuard"
 mkdir -p ${KEY_DIR}
@@ -86,10 +80,6 @@ echo 1 > /proc/sys/net/ipv4/ip_forward
 echo "[+] Démarrage et activation de WireGuard"
 systemctl enable wg-quick@${VPN_INTERFACE}
 systemctl start wg-quick@${VPN_INTERFACE}
-
-echo "[+] Sauvegarde des règles iptables pour persistance"
-iptables-save > /etc/iptables/rules.v4
-ip6tables-save > /etc/iptables/rules.v6
 
 echo "[+] Modification de /etc/ufw/before.rules pour ajouter NAT"
 sed -i '/\*filter/i \
