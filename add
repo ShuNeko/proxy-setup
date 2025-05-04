@@ -1,38 +1,117 @@
 #!/bin/bash
- 
-# Vérifie les droits root
-if [[ "$EUID" -ne 0 ]]; then
-  echo "Ce script doit être exécuté en tant que root."
-  exit 1
+
+set -e
+
+# -------- CONFIG --------
+LAN_INTERFACE="eth0"
+VPN_INTERFACE="wg0"
+KEY_DIR="/etc/wireguard/keys"
+WG_CONF="/etc/wireguard/${VPN_INTERFACE}.conf"
+HA_PROXY_CONF="/etc/haproxy/haproxy.cfg"
+IPTABLES_SAVE_PATH="/etc/iptables/rules.save"
+# ------------------------
+
+# Fonction pour sauvegarder les règles iptables
+save_iptables() {
+    iptables-save > $IPTABLES_SAVE_PATH
+}
+
+# Fonction pour restaurer les règles iptables
+restore_iptables() {
+    if [ -f $IPTABLES_SAVE_PATH ]; then
+        echo "[+] Restauration des règles iptables depuis $IPTABLES_SAVE_PATH"
+        iptables-restore < $IPTABLES_SAVE_PATH
+    else
+        echo "[-] Fichier de sauvegarde des règles iptables non trouvé : $IPTABLES_SAVE_PATH"
+    fi
+}
+
+# Fonction pour ajouter un client WireGuard
+add_wireguard_client() {
+    read -p "Entrez le titre du serveur : " SERVER_TITLE
+    read -p "Entrez la clé publique du client : " CLIENT_PUB_KEY
+    read -p "Entrez l'IP attribuée au client (ex: 192.168.5.2) : " CLIENT_IP
+
+    echo "[+] Ajout du client WireGuard"
+    systemctl stop wg-quick@wg0
+
+    cat <<EOF >> $WG_CONF
+
+[Peer]
+PublicKey = $CLIENT_PUB_KEY
+AllowedIPs = ${CLIENT_IP}/32
+EOF
+
+    systemctl start wg-quick@wg0
+}
+
+# Fonction pour configurer les règles iptables
+configure_iptables() {
+    read -p "Voulez-vous cloisonner le serveur ? (y/n) : " CLOISON
+    read -p "Voulez-vous utiliser le load balancing avec HaProxy ? (y/n) : " LOAD_BALANCING
+
+    echo "[+] Configuration des règles iptables"
+
+    # Suppression des règles existantes
+    iptables -t nat -F
+    iptables -t nat -X
+
+    # Règles de base
+    iptables -t nat -A PREROUTING -i $LAN_INTERFACE -j DNAT --to-destination $CLIENT_IP
+    iptables -t nat -A POSTROUTING -d $CLIENT_IP -j MASQUERADE
+
+    # Bloquer les ports dangereux
+    for port in 22 23 3389; do
+        iptables -t nat -A PREROUTING -i $LAN_INTERFACE -p tcp --dport $port -j ACCEPT
+    done
+
+    # Si cloisonnement demandé
+    if [ "$CLOISON" == "y" ]; then
+        iptables -A FORWARD -s $CLIENT_IP -d $VPN_NETWORK -j ACCEPT
+        iptables -A FORWARD -s $CLIENT_IP -d 0.0.0.0/0 -j REJECT
+    fi
+
+    # Si load balancing demandé
+    if [ "$LOAD_BALANCING" == "y" ]; then
+        read -p "Entrez les ports à utiliser pour le load balancing (séparés par des virgules, ex: 80,443) : " LOAD_BALANCING_PORTS
+
+        echo "[+] Configuration de HaProxy pour le load balancing"
+
+        IFS=',' read -r -a PORTS_ARRAY <<< "$LOAD_BALANCING_PORTS"
+        for PORT in "${PORTS_ARRAY[@]}"; do
+            cat <<EOF >> $HA_PROXY_CONF
+
+frontend http_front_$PORT
+    bind *:$PORT
+    mode http
+    default_backend http_back_$PORT
+
+backend http_back_$PORT
+    mode http
+    balance roundrobin
+    server server1 $CLIENT_IP:$PORT check
+EOF
+        done
+
+        systemctl restart haproxy
+    fi
+
+    # Sauvegarde des nouvelles règles
+    save_iptables
+}
+
+# Demander à l'utilisateur ce qu'il veut faire
+read -p "Voulez-vous restaurer les règles iptables ou ajouter un serveur ? (restaurer/ajouter) : " ACTION
+
+if [ "$ACTION" == "restaurer" ]; then
+    restore_iptables
+    echo "✅ Restauration des règles iptables terminée."
+    exit 0
+elif [ "$ACTION" == "ajouter" ]; then
+    add_wireguard_client
+    configure_iptables
+    echo "✅ Configuration terminée pour le serveur."
+else
+    echo "[-] Action invalide. Veuillez entrer 'restaurer' ou 'ajouter'."
+    exit 1
 fi
- 
-# Variables
-WG_CONF="/etc/wireguard/wg0.conf"
-INTERFACE="wg0"
- 
-read -p "Clé publique du serveur client : " SERVER_PUBLIC_KEY
-read -p "IP VPN du serveur client (ex: 10.0.0.2) : " SERVER_VPN_IP
- 
-# Arrêt de WireGuard
-echo "Arrêt de WireGuard..."
-systemctl stop wg-quick@$INTERFACE
- 
-# Ajout de la configuration [Peer]
-echo "Ajout de la configuration [Peer] dans $WG_CONF..."
-echo -e "\n[Peer]\nPublicKey = $SERVER_PUBLIC_KEY\nAllowedIPs = $SERVER_VPN_IP/32" >> "$WG_CONF"
- 
-# Redémarrage de WireGuard
-echo "Redémarrage de WireGuard..."
-systemctl start wg-quick@$INTERFACE
- 
-# Configuration des iptables
-echo "Configuration des règles iptables..."
-iptables -t nat -A PREROUTING -i eth0 -j DNAT --to-destination "$SERVER_VPN_IP"
-iptables -t nat -A POSTROUTING -d "$SERVER_VPN_IP" -j MASQUERADE
- 
-# Ouverture des ports spécifiques
-for PORT in 22 23 3389; do
-  iptables -t nat -A PREROUTING -i eth0 -p tcp --dport $PORT -j ACCEPT
-done
- 
-echo "Configuration terminée."
