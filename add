@@ -1,0 +1,38 @@
+#!/bin/bash
+ 
+# Vérifie les droits root
+if [[ "$EUID" -ne 0 ]]; then
+  echo "Ce script doit être exécuté en tant que root."
+  exit 1
+fi
+ 
+# Variables
+WG_CONF="/etc/wireguard/wg0.conf"
+INTERFACE="wg0"
+ 
+read -p "Clé publique du serveur client : " SERVER_PUBLIC_KEY
+read -p "IP VPN du serveur client (ex: 10.0.0.2) : " SERVER_VPN_IP
+ 
+# Arrêt de WireGuard
+echo "Arrêt de WireGuard..."
+systemctl stop wg-quick@$INTERFACE
+ 
+# Ajout de la configuration [Peer]
+echo "Ajout de la configuration [Peer] dans $WG_CONF..."
+echo -e "\n[Peer]\nPublicKey = $SERVER_PUBLIC_KEY\nAllowedIPs = $SERVER_VPN_IP/32" >> "$WG_CONF"
+ 
+# Redémarrage de WireGuard
+echo "Redémarrage de WireGuard..."
+systemctl start wg-quick@$INTERFACE
+ 
+# Configuration des iptables
+echo "Configuration des règles iptables..."
+iptables -t nat -A PREROUTING -i eth0 -j DNAT --to-destination "$SERVER_VPN_IP"
+iptables -t nat -A POSTROUTING -d "$SERVER_VPN_IP" -j MASQUERADE
+ 
+# Ouverture des ports spécifiques
+for PORT in 22 23 3389; do
+  iptables -t nat -A PREROUTING -i eth0 -p tcp --dport $PORT -j ACCEPT
+done
+ 
+echo "Configuration terminée."
