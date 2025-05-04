@@ -12,12 +12,10 @@ IPTABLES_SAVE_PATH="/etc/iptables/rules.save"
 VPN_NETWORK="192.168.5.0/24"
 # ------------------------
 
-# Fonction pour sauvegarder les règles iptables
 save_iptables() {
     iptables-save > $IPTABLES_SAVE_PATH
 }
 
-# Fonction pour restaurer les règles iptables
 restore_iptables() {
     if [ -f $IPTABLES_SAVE_PATH ]; then
         echo "[+] Restauration des règles iptables depuis $IPTABLES_SAVE_PATH"
@@ -27,7 +25,6 @@ restore_iptables() {
     fi
 }
 
-# Fonction pour ajouter un client WireGuard
 add_wireguard_client() {
     read -p "Entrez le titre du serveur : " SERVER_TITLE
     read -p "Entrez la clé publique du client : " CLIENT_PUB_KEY
@@ -47,7 +44,6 @@ EOF
     systemctl start wg-quick@$VPN_INTERFACE
 }
 
-# Fonction pour ajouter une règle iptables si elle n'existe pas
 add_iptables_rule() {
     local table=$1
     shift
@@ -58,7 +54,6 @@ add_iptables_rule() {
     fi
 }
 
-# Fonction pour configurer les règles iptables
 configure_iptables() {
     read -p "Entrez à nouveau l'IP attribuée au client (ex: 192.168.5.2) : " CLIENT_IP
     read -p "Voulez-vous cloisonner le serveur ? (y/n) : " CLOISON
@@ -66,27 +61,22 @@ configure_iptables() {
 
     echo "[+] Configuration des règles iptables"
 
-    # Règle DNAT vers le client
+    # Rediriger tout le trafic entrant vers le client (optionnel selon besoin)
     add_iptables_rule nat PREROUTING -i "$LAN_INTERFACE" -j DNAT --to-destination "$CLIENT_IP"
 
-    # Masquerade pour retour
+    # Masquerade pour le retour
     add_iptables_rule nat POSTROUTING -d "$CLIENT_IP" -j MASQUERADE
 
-    # Règle NAT générale (si pas déjà en place)
+    # NAT général pour les clients VPN
     add_iptables_rule nat POSTROUTING -s "$VPN_NETWORK" -o "$LAN_INTERFACE" -j MASQUERADE
 
-    # Ports dangereux à autoriser explicitement si nécessaire
-    for port in 22 23 3389; do
-        add_iptables_rule nat PREROUTING -i "$LAN_INTERFACE" -p tcp --dport "$port" -j ACCEPT
-    done
+    # ❌ Suppression des règles cassées de port "ACCEPT" sur PREROUTING
 
-    # Cloisonnement
     if [ "$CLOISON" == "y" ]; then
         add_iptables_rule filter FORWARD -s "$CLIENT_IP" -d "$VPN_NETWORK" -j ACCEPT
         add_iptables_rule filter FORWARD -s "$CLIENT_IP" -d 0.0.0.0/0 -j REJECT
     fi
 
-    # HAProxy
     if [ "$LOAD_BALANCING" == "y" ]; then
         read -p "Entrez les ports à utiliser pour le load balancing (séparés par des virgules, ex: 80,443) : " LOAD_BALANCING_PORTS
 
@@ -115,7 +105,6 @@ EOF
     save_iptables
 }
 
-# Menu utilisateur
 read -p "Voulez-vous restaurer les règles iptables ou ajouter un serveur ? (restaurer/ajouter) : " ACTION
 
 if [ "$ACTION" == "restaurer" ]; then
