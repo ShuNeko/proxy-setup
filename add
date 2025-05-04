@@ -39,7 +39,7 @@ add_wireguard_client() {
 
 [Peer]
 PublicKey = $CLIENT_PUB_KEY
-AllowedIPs = ${CLIENT_IP}/32
+AllowedIPs = ${CLIENT_IP}/24
 EOF
 
     systemctl start wg-quick@wg0
