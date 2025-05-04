@@ -5,76 +5,97 @@ set -e
 # -------- CONFIG --------
 LAN_INTERFACE="eth0"
 VPN_INTERFACE="wg0"
-VPN_NETWORK="192.168.5.0/24"
 KEY_DIR="/etc/wireguard/keys"
 WG_CONF="/etc/wireguard/${VPN_INTERFACE}.conf"
 HA_PROXY_CONF="/etc/haproxy/haproxy.cfg"
 IPTABLES_SAVE_PATH="/etc/iptables/rules.save"
+VPN_NETWORK="192.168.5.0/24"
 # ------------------------
 
+# Fonction pour sauvegarder les règles iptables
 save_iptables() {
-    iptables-save > "$IPTABLES_SAVE_PATH"
+    iptables-save > $IPTABLES_SAVE_PATH
 }
 
+# Fonction pour restaurer les règles iptables
 restore_iptables() {
-    if [ -f "$IPTABLES_SAVE_PATH" ]; then
+    if [ -f $IPTABLES_SAVE_PATH ]; then
         echo "[+] Restauration des règles iptables depuis $IPTABLES_SAVE_PATH"
-        iptables-restore < "$IPTABLES_SAVE_PATH"
+        iptables-restore < $IPTABLES_SAVE_PATH
     else
         echo "[-] Fichier de sauvegarde des règles iptables non trouvé : $IPTABLES_SAVE_PATH"
     fi
 }
 
+# Fonction pour ajouter un client WireGuard
 add_wireguard_client() {
     read -p "Entrez le titre du serveur : " SERVER_TITLE
     read -p "Entrez la clé publique du client : " CLIENT_PUB_KEY
     read -p "Entrez l'IP attribuée au client (ex: 192.168.5.2) : " CLIENT_IP
 
     echo "[+] Ajout du client WireGuard"
-    systemctl stop wg-quick@${VPN_INTERFACE}
+    systemctl stop wg-quick@$VPN_INTERFACE
 
-    cat <<EOF >> "$WG_CONF"
+    cat <<EOF >> $WG_CONF
 
-# ${SERVER_TITLE}
+# $SERVER_TITLE
 [Peer]
 PublicKey = $CLIENT_PUB_KEY
 AllowedIPs = ${CLIENT_IP}/32
 EOF
 
-    systemctl start wg-quick@${VPN_INTERFACE}
+    systemctl start wg-quick@$VPN_INTERFACE
 }
 
+# Fonction pour ajouter une règle iptables si elle n'existe pas
+add_iptables_rule() {
+    local table=$1
+    shift
+    local rule=("$@")
+
+    if ! iptables -t "$table" -C "${rule[@]}" 2>/dev/null; then
+        iptables -t "$table" -A "${rule[@]}"
+    fi
+}
+
+# Fonction pour configurer les règles iptables
 configure_iptables() {
+    read -p "Entrez à nouveau l'IP attribuée au client (ex: 192.168.5.2) : " CLIENT_IP
     read -p "Voulez-vous cloisonner le serveur ? (y/n) : " CLOISON
     read -p "Voulez-vous utiliser le load balancing avec HaProxy ? (y/n) : " LOAD_BALANCING
 
-    echo "[+] Ajout des règles iptables spécifiques au client"
+    echo "[+] Configuration des règles iptables"
 
-    # DNAT vers client
-    if ! iptables -t nat -C PREROUTING -i "$LAN_INTERFACE" -j DNAT --to-destination "$CLIENT_IP" &>/dev/null; then
-        iptables -t nat -A PREROUTING -i "$LAN_INTERFACE" -j DNAT --to-destination "$CLIENT_IP"
-    fi
+    # Règle DNAT vers le client
+    add_iptables_rule nat PREROUTING -i "$LAN_INTERFACE" -j DNAT --to-destination "$CLIENT_IP"
 
-    # MASQUERADE vers client
-    if ! iptables -t nat -C POSTROUTING -d "$CLIENT_IP" -j MASQUERADE &>/dev/null; then
-        iptables -t nat -A POSTROUTING -d "$CLIENT_IP" -j MASQUERADE
-    fi
+    # Masquerade pour retour
+    add_iptables_rule nat POSTROUTING -d "$CLIENT_IP" -j MASQUERADE
+
+    # Règle NAT générale (si pas déjà en place)
+    add_iptables_rule nat POSTROUTING -s "$VPN_NETWORK" -o "$LAN_INTERFACE" -j MASQUERADE
+
+    # Ports dangereux à autoriser explicitement si nécessaire
+    for port in 22 23 3389; do
+        add_iptables_rule nat PREROUTING -i "$LAN_INTERFACE" -p tcp --dport "$port" -j ACCEPT
+    done
 
     # Cloisonnement
     if [ "$CLOISON" == "y" ]; then
-        echo "[+] Ajout des règles de cloisonnement"
-        iptables -A FORWARD -s "$CLIENT_IP" -d "$VPN_NETWORK" -j ACCEPT
-        iptables -A FORWARD -s "$CLIENT_IP" -d 0.0.0.0/0 -j REJECT
+        add_iptables_rule filter FORWARD -s "$CLIENT_IP" -d "$VPN_NETWORK" -j ACCEPT
+        add_iptables_rule filter FORWARD -s "$CLIENT_IP" -d 0.0.0.0/0 -j REJECT
     fi
 
-    # Load balancing
+    # HAProxy
     if [ "$LOAD_BALANCING" == "y" ]; then
-        read -p "Entrez les ports à utiliser pour le load balancing (ex: 80,443) : " LOAD_BALANCING_PORTS
-        IFS=',' read -ra PORTS <<< "$LOAD_BALANCING_PORTS"
+        read -p "Entrez les ports à utiliser pour le load balancing (séparés par des virgules, ex: 80,443) : " LOAD_BALANCING_PORTS
 
-        echo "[+] Configuration de HaProxy"
-        for PORT in "${PORTS[@]}"; do
-            cat <<EOF >> "$HA_PROXY_CONF"
+        echo "[+] Configuration de HaProxy pour le load balancing"
+
+        IFS=',' read -r -a PORTS_ARRAY <<< "$LOAD_BALANCING_PORTS"
+        for PORT in "${PORTS_ARRAY[@]}"; do
+            if ! grep -q "frontend http_front_$PORT" "$HA_PROXY_CONF"; then
+                cat <<EOF >> "$HA_PROXY_CONF"
 
 frontend http_front_$PORT
     bind *:$PORT
@@ -84,8 +105,9 @@ frontend http_front_$PORT
 backend http_back_$PORT
     mode http
     balance roundrobin
-    server $SERVER_TITLE $CLIENT_IP:$PORT check
+    server server1 $CLIENT_IP:$PORT check
 EOF
+            fi
         done
         systemctl restart haproxy
     fi
@@ -93,6 +115,7 @@ EOF
     save_iptables
 }
 
+# Menu utilisateur
 read -p "Voulez-vous restaurer les règles iptables ou ajouter un serveur ? (restaurer/ajouter) : " ACTION
 
 if [ "$ACTION" == "restaurer" ]; then
@@ -102,7 +125,7 @@ if [ "$ACTION" == "restaurer" ]; then
 elif [ "$ACTION" == "ajouter" ]; then
     add_wireguard_client
     configure_iptables
-    echo "✅ Serveur ajouté et configuration terminée."
+    echo "✅ Configuration terminée pour le serveur."
 else
     echo "[-] Action invalide. Veuillez entrer 'restaurer' ou 'ajouter'."
     exit 1
