@@ -2,6 +2,29 @@
 
 set -e
 
+# -------- PRÉREQUIS --------
+# Vérifie que le script est exécuté en tant que root
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ Ce script doit être exécuté avec les droits root."
+  exit 1
+fi
+
+# Liste des paquets requis
+REQUIRED_CMDS=(wg wg-quick iptables ufw fail2ban haproxy)
+
+echo "[+] Vérification et installation des dépendances..."
+apt update
+for cmd in "${REQUIRED_CMDS[@]}"; do
+    if ! command -v "$cmd" &>/dev/null; then
+        echo "⏳ $cmd non trouvé. Installation en cours..."
+        apt install -y "${cmd}"
+    else
+        echo "✅ $cmd est déjà installé."
+    fi
+done
+# ----------------------------
+
+
 # -------- CONFIG --------
 LAN_INTERFACE="eth0"
 LAN_STATIC_IP="192.168.1.24"
@@ -33,13 +56,10 @@ iface ${LAN_INTERFACE} inet static
 EOF
 
 echo "[+] Redémarrage du réseau"
-systemctl restart networking || true
+systemctl restart networking || { ifdown ${LAN_INTERFACE}; ifup ${LAN_INTERFACE}; }
 
-echo "[+] Mise à jour du système"
-apt update && apt upgrade -y
-
-echo "[+] Installation des paquets nécessaires"
-apt install -y wireguard ufw fail2ban haproxy
+echo "[+] Mise à jour complète du système"
+apt upgrade -y
 
 echo "[+] Création du dossier pour les clés WireGuard"
 mkdir -p ${KEY_DIR}
@@ -49,7 +69,6 @@ cd ${KEY_DIR}
 echo "[+] Génération des clés WireGuard (OpenCorePrivate/OpenCorePublic)"
 umask 077
 wg genkey | tee OpenCorePrivate.key | wg pubkey > OpenCorePublic.key
-
 SERVER_PRIV_KEY=$(cat OpenCorePrivate.key)
 
 echo "[+] Écriture de la configuration WireGuard : ${WG_CONF}"
@@ -111,7 +130,7 @@ echo "Fichier de config : ${WG_CONF}"
 echo "Clés stockées dans : ${KEY_DIR}"
 echo ""
 echo "ℹ️ Tu peux maintenant ajouter des clients WireGuard avec ./add.sh."
-echo "🛑 Pour supprimé l'installation du Proxy utilise ./purge.sh."
+echo "🛑 Pour supprimer l'installation du proxy utilise ./purge.sh."
 echo ""
 
 echo "[+] Suppression du script d'installation : ${SCRIPT_PATH}"
