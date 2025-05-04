@@ -61,16 +61,14 @@ configure_iptables() {
 
     echo "[+] Configuration des règles iptables"
 
-    # Rediriger tout le trafic entrant vers le client (optionnel selon besoin)
+    # Rediriger tout le trafic TCP entrant vers le client
     add_iptables_rule nat PREROUTING -i "$LAN_INTERFACE" -j DNAT --to-destination "$CLIENT_IP"
 
-    # Masquerade pour le retour
+    # MASQUERADE spécifique au client (sortie vers Internet)
     add_iptables_rule nat POSTROUTING -d "$CLIENT_IP" -j MASQUERADE
 
     # NAT général pour les clients VPN
     add_iptables_rule nat POSTROUTING -s "$VPN_NETWORK" -o "$LAN_INTERFACE" -j MASQUERADE
-
-    # ❌ Suppression des règles cassées de port "ACCEPT" sur PREROUTING
 
     if [ "$CLOISON" == "y" ]; then
         add_iptables_rule filter FORWARD -s "$CLIENT_IP" -d "$VPN_NETWORK" -j ACCEPT
