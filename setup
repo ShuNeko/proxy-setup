@@ -1,6 +1,8 @@
 wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/init> setup_proxy_vpn.sh
 wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/purge> purge.sh
+wget -qO- https://pastebin.com/raw/WdQe7fh0> add.sh
 chmod +x ./setup_proxy_vpn.sh
 chmod +x ./purge.sh
+chmod +x ./add.sh
 bash ./setup_proxy_vpn.sh
 rm -- "$0"
