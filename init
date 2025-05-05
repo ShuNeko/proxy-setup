@@ -64,14 +64,10 @@ PrivateKey = ${SERVER_PRIV_KEY}
 SaveConfig = true
 
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; \
-         iptables -A FORWARD -o %i -j ACCEPT; \
-         iptables -A FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j LOG --log-prefix "WG_TO_LAN_BLOCKED: "; \
-         iptables -A FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j REJECT
+         iptables -A FORWARD -o %i -j ACCEPT
 
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; \
-           iptables -D FORWARD -o %i -j ACCEPT; \
-           iptables -D FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j LOG --log-prefix "WG_TO_LAN_BLOCKED: "; \
-           iptables -D FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j REJECT
+           iptables -D FORWARD -o %i -j ACCEPT
 EOF
 
 chmod 600 ${WG_CONF}
