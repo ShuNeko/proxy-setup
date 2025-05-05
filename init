@@ -62,12 +62,6 @@ Address = ${VPN_SERVER_IP}
 ListenPort = ${VPN_PORT}
 PrivateKey = ${SERVER_PRIV_KEY}
 SaveConfig = true
-
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; \
-         iptables -A FORWARD -o %i -j ACCEPT
-
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; \
-           iptables -D FORWARD -o %i -j ACCEPT
 EOF
 
 chmod 600 ${WG_CONF}
@@ -86,12 +80,6 @@ sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/defa
 echo "[+] Démarrage et activation de WireGuard"
 systemctl enable wg-quick@${VPN_INTERFACE}
 systemctl start wg-quick@${VPN_INTERFACE}
-
-echo "[+] Modification de /etc/ufw/before.rules pour ajouter NAT"
-sed -i '/\*filter/i \
-*nat\n\
-:POSTROUTING ACCEPT [0:0]\n\
-COMMIT\n' /etc/ufw/before.rules
 
 echo "[+] Configuration du pare-feu avec UFW"
 ufw --force disable
