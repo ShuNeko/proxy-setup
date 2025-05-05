@@ -52,6 +52,9 @@ wg genkey | tee OpenCorePrivate.key | wg pubkey > OpenCorePublic.key
 
 SERVER_PRIV_KEY=$(cat OpenCorePrivate.key)
 
+echo "[+] Réinitialisation des règles NAT (iptables -t nat -F)"
+iptables -t nat -F
+
 echo "[+] Écriture de la configuration WireGuard : ${WG_CONF}"
 cat <<EOF > ${WG_CONF}
 [Interface]
@@ -62,13 +65,13 @@ SaveConfig = true
 
 PostUp = iptables -A FORWARD -i %i -j ACCEPT; \
          iptables -A FORWARD -o %i -j ACCEPT; \
-         iptables -t nat -A POSTROUTING -s ${VPN_NETWORK} -o ${LAN_INTERFACE} -j MASQUERADE; \
-         iptables -A FORWARD -i %i -d 192.168.0.0/16 -j REJECT
+         iptables -A FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j LOG --log-prefix "WG_TO_LAN_BLOCKED: "; \
+         iptables -A FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j REJECT
 
 PostDown = iptables -D FORWARD -i %i -j ACCEPT; \
            iptables -D FORWARD -o %i -j ACCEPT; \
-           iptables -t nat -D POSTROUTING -s ${VPN_NETWORK} -o ${LAN_INTERFACE} -j MASQUERADE; \
-           iptables -D FORWARD -i %i -d 192.168.0.0/16 -j REJECT
+           iptables -D FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j LOG --log-prefix "WG_TO_LAN_BLOCKED: "; \
+           iptables -D FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j REJECT
 EOF
 
 chmod 600 ${WG_CONF}
@@ -92,7 +95,6 @@ echo "[+] Modification de /etc/ufw/before.rules pour ajouter NAT"
 sed -i '/\*filter/i \
 *nat\n\
 :POSTROUTING ACCEPT [0:0]\n\
--A POSTROUTING -s 192.168.5.0/24 -o eth0 -j MASQUERADE\n\
 COMMIT\n' /etc/ufw/before.rules
 
 echo "[+] Configuration du pare-feu avec UFW"
