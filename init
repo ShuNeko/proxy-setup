@@ -102,6 +102,10 @@ ufw default allow outgoing
 ufw allow in on ${LAN_INTERFACE}
 ufw allow out on ${LAN_INTERFACE}
 
+# Autoriser explicitement le trafic vers le réseau LAN
+ufw allow in to ${LAN_STATIC_IP}/24
+ufw allow out to ${LAN_STATIC_IP}/24
+
 echo "[+] Blocage des ports sensibles : ${BLOCKED_PORTS[*]}"
 for port in "${BLOCKED_PORTS[@]}"; do
     ufw deny $port
@@ -130,3 +134,4 @@ echo ""
 
 echo "[+] Suppression du script d'installation : ${SCRIPT_PATH}"
 rm -f "${SCRIPT_PATH}"
+
