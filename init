@@ -2,131 +2,133 @@
 
 set -e
 
-# -------- CONFIG --------
-LAN_INTERFACE="eth0"
-LAN_STATIC_IP="192.168.1.24"
-LAN_NETMASK="255.255.255.0"
-LAN_GATEWAY="192.168.1.1"
+# === Demander l'identifiant et mot de passe admin FRP ===
+read -p "Entrez le nom d'utilisateur admin FRP : " FRP_ADMIN_USER
+read -s -p "Entrez le mot de passe admin FRP : " FRP_ADMIN_PASSWORD
+echo
 
-VPN_INTERFACE="wg0"
-VPN_SERVER_IP="192.168.5.55/24"
-VPN_NETWORK="192.168.5.0/24"
-VPN_PORT=51820
-KEY_DIR="/etc/wireguard/keys"
-WG_CONF="/etc/wireguard/${VPN_INTERFACE}.conf"
+# === Générer un token sécurisé pour FRP ===
+generate_token() {
+  tr -dc 'A-Za-z1-9' < /dev/urandom | head -c 63
+}
+FRP_TOKEN="$(generate_token)-"
+
+# === Variables ===
 SCRIPT_PATH="$(realpath "$0")"
-
-# Ports à bloquer
+WG_INTERFACE="wg0"
+WG_IP="10.55.5.1/24"
+WG_PORT=51820
+WG_CONFIG="/etc/wireguard/${WG_INTERFACE}.conf"
+FRP_DIR="/opt/frp"
+FRP_VERSION="0.58.1"
+FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_amd64.tar.gz"
+FRPS_PORT=7000
+FRPS_DASHBOARD_PORT=7631
 BLOCKED_PORTS=(22 23 3389)
-# ------------------------
 
-echo "[+] Configuration de l’interface LAN avec IP fixe : ${LAN_STATIC_IP}"
-cat <<EOF > /etc/network/interfaces
-auto lo
-iface lo inet loopback
+# === Vérification des droits ===
+if [ "$EUID" -ne 0 ]; then
+  echo "Ce script doit être exécuté en root." >&2
+  exit 1
+fi
 
-auto ${LAN_INTERFACE}
-iface ${LAN_INTERFACE} inet static
-    address ${LAN_STATIC_IP}
-    netmask ${LAN_NETMASK}
-    gateway ${LAN_GATEWAY}
-EOF
+# === Installer WireGuard et UFW ===
+echo "[+] Installation de WireGuard et des outils nécessaires..."
+apt update
+apt install -y wireguard curl ufw
 
-echo "[+] Redémarrage du réseau"
-systemctl restart networking || true
-
-echo "[+] Mise à jour du système"
-apt update && apt upgrade -y
-
-echo "[+] Installation des paquets nécessaires"
-apt install -y wireguard ufw fail2ban haproxy
-
-echo "[+] Création du dossier pour les clés WireGuard"
-mkdir -p ${KEY_DIR}
-chmod 700 ${KEY_DIR}
-cd ${KEY_DIR}
-
-echo "[+] Génération des clés WireGuard (OpenCorePrivate/OpenCorePublic)"
+# === Génération des clés WireGuard ===
+echo "[+] Génération des clés WireGuard..."
+mkdir -p /etc/wireguard
 umask 077
-wg genkey | tee OpenCorePrivate.key | wg pubkey > OpenCorePublic.key
+wg genkey | tee /etc/wireguard/privatekey | wg pubkey > /etc/wireguard/publickey
+PRIVATE_KEY=$(cat /etc/wireguard/privatekey)
 
-SERVER_PRIV_KEY=$(cat OpenCorePrivate.key)
-
-echo "[+] Réinitialisation des règles NAT (iptables -t nat -F)"
-iptables -t nat -F
-
-echo "[+] Écriture de la configuration WireGuard : ${WG_CONF}"
-cat <<EOF > ${WG_CONF}
+# === Configuration WireGuard ===
+echo "[+] Création de la configuration WireGuard..."
+cat > "$WG_CONFIG" <<EOF
 [Interface]
-Address = ${VPN_SERVER_IP}
-ListenPort = ${VPN_PORT}
-PrivateKey = ${SERVER_PRIV_KEY}
+Address = ${WG_IP}
+PrivateKey = ${PRIVATE_KEY}
+ListenPort = ${WG_PORT}
 SaveConfig = true
-
-PostUp = iptables -A FORWARD -i %i -j ACCEPT; \
-         iptables -A FORWARD -o %i -j ACCEPT; \
-         iptables -A FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j LOG --log-prefix "WG_TO_LAN_BLOCKED: "; \
-         iptables -A FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j REJECT
-
-PostDown = iptables -D FORWARD -i %i -j ACCEPT; \
-           iptables -D FORWARD -o %i -j ACCEPT; \
-           iptables -D FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j LOG --log-prefix "WG_TO_LAN_BLOCKED: "; \
-           iptables -D FORWARD -i %i -o eth0 -d 192.168.1.0/24 -j REJECT
 EOF
 
-chmod 600 ${WG_CONF}
+chmod 600 "$WG_CONFIG"
+systemctl enable wg-quick@$WG_INTERFACE
+systemctl start wg-quick@$WG_INTERFACE
 
-echo "[+] Activation du routage IP dans /etc/sysctl.conf"
-grep -q '^net.ipv4.ip_forward' /etc/sysctl.conf && \
-    sed -i 's/^net.ipv4.ip_forward.*/net.ipv4.ip_forward=1/' /etc/sysctl.conf || \
-    echo "net.ipv4.ip_forward=1" >> /etc/sysctl.conf
-
-echo "[+] Application immédiate du routage IP"
-sysctl -w net.ipv4.ip_forward=1
-
-echo "[+] Modification de /etc/default/ufw pour autoriser le forwarding"
-sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
-
-echo "[+] Démarrage et activation de WireGuard"
-systemctl enable wg-quick@${VPN_INTERFACE}
-systemctl start wg-quick@${VPN_INTERFACE}
-
-echo "[+] Modification de /etc/ufw/before.rules pour ajouter NAT"
-sed -i '/\*filter/i \
-*nat\n\
-:POSTROUTING ACCEPT [0:0]\n\
-COMMIT\n' /etc/ufw/before.rules
-
-echo "[+] Configuration du pare-feu avec UFW"
-ufw --force disable
-ufw default allow incoming
-ufw default allow outgoing
+# === Pare-feu & IP forwarding ===
+echo "[+] Configuration du pare-feu et du routage..."
+ufw allow ${WG_PORT}/udp
+ufw allow in on wg0
+ufw allow out on wg0
+ufw --force enable
 
 echo "[+] Blocage des ports sensibles : ${BLOCKED_PORTS[*]}"
 for port in "${BLOCKED_PORTS[@]}"; do
     ufw deny $port
 done
 
-ufw allow ${VPN_PORT}/udp comment 'WireGuard VPN'
+echo "net.ipv4.ip_forward=1" > /etc/sysctl.d/99-wg-forward.conf
+sysctl -p /etc/sysctl.d/99-wg-forward.conf
 
-echo "[+] Réactivation propre du pare-feu"
-ufw --force enable
+# === Télécharger et installer FRP ===
+echo "[+] Installation de FRP (frps)..."
+mkdir -p $FRP_DIR
+cd /tmp
+curl -L -o frp.tar.gz "$FRP_URL"
+tar -xzf frp.tar.gz
+cp -f frp_*/frps $FRP_DIR/
+rm -rf frp.tar.gz frp_*
 
-echo "[+] Redémarrage de WireGuard pour appliquer tous les changements"
-systemctl restart wg-quick@${VPN_INTERFACE}
+# === Créer frps.ini ===
+cat > $FRP_DIR/frps.ini <<EOF
+[common]
+bind_port = ${FRPS_PORT}
+bind_addr = 0.0.0.0
+dashboard_port = ${FRPS_DASHBOARD_PORT}
+dashboard_user = ${FRP_ADMIN_USER}
+dashboard_pwd = ${FRP_ADMIN_PASSWORD}
+token = ${FRP_TOKEN}
+vhost_http_port = 8080
+EOF
 
-echo "[+] fail2ban est déjà installé. Vérifie /etc/fail2ban/jail.local pour personnaliser la protection."
+# === Service systemd pour frps ===
+cat > /etc/systemd/system/frps.service <<EOF
+[Unit]
+Description=FRP Server Service
+After=network.target
 
-echo ""
-echo "✅ INSTALLATION TERMINÉE"
-echo "Ton proxy WireGuard est prêt sur ${LAN_STATIC_IP}:${VPN_PORT}"
-echo "IP WireGuard interne : ${VPN_SERVER_IP}"
-echo "Fichier de config : ${WG_CONF}"
-echo "Clés stockées dans : ${KEY_DIR}"
-echo ""
-echo "ℹ️ Tu peux maintenant ajouter des clients WireGuard avec ./add.sh."
-echo "🛑 Pour supprimé l'installation du Proxy utilise ./purge.sh."
-echo ""
+[Service]
+ExecStart=${FRP_DIR}/frps -c ${FRP_DIR}/frps.ini
+Restart=on-failure
 
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reexec
+systemctl enable frps
+systemctl start frps
+
+# === Nettoyage ===
 echo "[+] Suppression du script d'installation : ${SCRIPT_PATH}"
+apt purge -y curl
 rm -f "${SCRIPT_PATH}"
+
+# === Résumé final ===
+echo ""
+echo "[✔] Serveur WireGuard + FRP prêt !"
+echo "→ WireGuard IP : ${WG_IP}"
+echo "→ FRP écoute sur le port : ${FRPS_PORT}"
+echo "→ Dashboard FRP : http://192.168.1.24:${FRPS_DASHBOARD_PORT}"
+echo ""
+echo "[🔐] Identifiants FRP définis par vous."
+echo "[🔑] Token FRP généré : ${FRP_TOKEN}"
+echo ""
+echo "[➕] Faites ./add.sh pour ajouter un Client"
+echo "[➖] Faites ./remove.sh pour retirer un Client"
+echo "[🛑] Faites ./purge.sh pour supprimer le Proxy"
+echo ""
+
