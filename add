@@ -2,118 +2,40 @@
 
 set -e
 
-# -------- CONFIG --------
-LAN_INTERFACE="eth0"
-VPN_INTERFACE="wg0"
-KEY_DIR="/etc/wireguard/keys"
-WG_CONF="/etc/wireguard/${VPN_INTERFACE}.conf"
-HA_PROXY_CONF="/etc/haproxy/haproxy.cfg"
-IPTABLES_SAVE_PATH="/etc/iptables/rules.save"
-VPN_NETWORK="192.168.5.0/24"
-# ------------------------
+WG_CONFIG="/etc/wireguard/wg0.conf"
+WG_INTERFACE="wg0"
 
-save_iptables() {
-    iptables-save > $IPTABLES_SAVE_PATH
-}
-
-restore_iptables() {
-    if [ -f $IPTABLES_SAVE_PATH ]; then
-        echo "[+] Restauration des règles iptables depuis $IPTABLES_SAVE_PATH"
-        iptables-restore < $IPTABLES_SAVE_PATH
-    else
-        echo "[-] Fichier de sauvegarde des règles iptables non trouvé : $IPTABLES_SAVE_PATH"
-    fi
-}
-
-add_wireguard_client() {
-    read -p "Entrez le titre du serveur : " SERVER_TITLE
-    read -p "Entrez la clé publique du client : " CLIENT_PUB_KEY
-    read -p "Entrez l'IP attribuée au client (ex: 192.168.5.2) : " CLIENT_IP
-
-    echo "[+] Ajout du client WireGuard"
-    systemctl stop wg-quick@$VPN_INTERFACE
-
-    cat <<EOF >> $WG_CONF
-
-# $SERVER_TITLE
-[Peer]
-PublicKey = $CLIENT_PUB_KEY
-AllowedIPs = ${CLIENT_IP}/32
-EOF
-
-    systemctl start wg-quick@$VPN_INTERFACE
-}
-
-add_iptables_rule() {
-    local table=$1
-    shift
-    local rule=("$@")
-
-    if ! iptables -t "$table" -C "${rule[@]}" 2>/dev/null; then
-        iptables -t "$table" -A "${rule[@]}"
-    fi
-}
-
-configure_iptables() {
-    read -p "Entrez à nouveau l'IP attribuée au client (ex: 192.168.5.2) : " CLIENT_IP
-    read -p "Voulez-vous cloisonner le serveur ? (y/n) : " CLOISON
-    read -p "Voulez-vous utiliser le load balancing avec HaProxy ? (y/n) : " LOAD_BALANCING
-
-    echo "[+] Configuration des règles iptables"
-
-    # Rediriger tout le trafic TCP entrant vers le client
-    add_iptables_rule nat PREROUTING -i "$LAN_INTERFACE" -j DNAT --to-destination "$CLIENT_IP"
-
-    # MASQUERADE spécifique au client (sortie vers Internet)
-    add_iptables_rule nat POSTROUTING -d "$CLIENT_IP" -j MASQUERADE
-
-    # NAT général pour les clients VPN
-    add_iptables_rule nat POSTROUTING -s "$VPN_NETWORK" -o "$LAN_INTERFACE" -j MASQUERADE
-
-    if [ "$CLOISON" == "y" ]; then
-        add_iptables_rule filter FORWARD -s "$CLIENT_IP" -d "$VPN_NETWORK" -j ACCEPT
-        add_iptables_rule filter FORWARD -s "$CLIENT_IP" -d 0.0.0.0/0 -j REJECT
-    fi
-
-    if [ "$LOAD_BALANCING" == "y" ]; then
-        read -p "Entrez les ports à utiliser pour le load balancing (séparés par des virgules, ex: 80,443) : " LOAD_BALANCING_PORTS
-
-        echo "[+] Configuration de HaProxy pour le load balancing"
-
-        IFS=',' read -r -a PORTS_ARRAY <<< "$LOAD_BALANCING_PORTS"
-        for PORT in "${PORTS_ARRAY[@]}"; do
-            if ! grep -q "frontend http_front_$PORT" "$HA_PROXY_CONF"; then
-                cat <<EOF >> "$HA_PROXY_CONF"
-
-frontend http_front_$PORT
-    bind *:$PORT
-    mode http
-    default_backend http_back_$PORT
-
-backend http_back_$PORT
-    mode http
-    balance roundrobin
-    server server1 $CLIENT_IP:$PORT check
-EOF
-            fi
-        done
-        systemctl restart haproxy
-    fi
-
-    save_iptables
-}
-
-read -p "Voulez-vous restaurer les règles iptables ou ajouter un serveur ? (restaurer/ajouter) : " ACTION
-
-if [ "$ACTION" == "restaurer" ]; then
-    restore_iptables
-    echo "✅ Restauration des règles iptables terminée."
-    exit 0
-elif [ "$ACTION" == "ajouter" ]; then
-    add_wireguard_client
-    configure_iptables
-    echo "✅ Configuration terminée pour le serveur."
-else
-    echo "[-] Action invalide. Veuillez entrer 'restaurer' ou 'ajouter'."
-    exit 1
+# === Vérification des droits ===
+if [ "$EUID" -ne 0 ]; then
+  echo "Ce script doit être exécuté en root." >&2
+  exit 1
 fi
+
+# === Entrée utilisateur ===
+read -p "Nom du client (ex: alice): " CLIENT_NAME
+read -p "IP à attribuer (ex: 10.55.5.2): " CLIENT_IP
+read -p "Clé publique du client: " CLIENT_PUBKEY
+
+# === Vérification basique ===
+if [[ -z "$CLIENT_NAME" || -z "$CLIENT_IP" || -z "$CLIENT_PUBKEY" ]]; then
+  echo "[❌] Tous les champs sont obligatoires." >&2
+  exit 1
+fi
+
+# === Ajout dans le fichier de configuration ===
+echo "[+] Ajout du client $CLIENT_NAME à $WG_CONFIG..."
+
+cat >> "$WG_CONFIG" <<EOF
+
+# ${CLIENT_NAME}
+[Peer]
+PublicKey = ${CLIENT_PUBKEY}
+AllowedIPs = 10.55.5.${CLIENT_IP}/32
+EOF
+
+# === Application dynamique de la configuration ===
+echo "[+] Rechargement de la configuration WireGuard..."
+
+wg set "$WG_INTERFACE" peer "$CLIENT_PUBKEY" allowed-ips "10.55.5.$CLIENT_IP/32"
+
+echo "[✅] Client $CLIENT_NAME ajouté avec l'IP 10.55.5.$CLIENT_IP"
