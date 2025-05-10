@@ -2,82 +2,60 @@
 
 set -e
 
-# -------- CONFIG --------
-LAN_INTERFACE="eth0"
-VPN_INTERFACE="wg0"
-VPN_NETWORK="192.168.5.0/24"
-VPN_PORT=51820
-KEY_DIR="/etc/wireguard/keys"
-WG_CONF="/etc/wireguard/${VPN_INTERFACE}.conf"
-# ------------------------
+SCRIPT_PATH="$(realpath "$0")"
 
-echo "[!] ATTENTION : Ce script va supprimer toutes les configurations liées au VPN Proxy WireGuard."
-read -p "Continuer ? (y/N): " confirm
-[[ "$confirm" != "y" && "$confirm" != "Y" ]] && echo "Annulé." && exit 1
+# === Vérification des droits ===
+if [ "$EUID" -ne 0 ]; then
+  echo "Ce script doit être exécuté en root." >&2
+  exit 1
+fi
 
-echo "[+] Arrêt du service WireGuard"
-systemctl stop wg-quick@${VPN_INTERFACE} || true
-systemctl disable wg-quick@${VPN_INTERFACE} || true
+echo "[🧨] Suppression de WireGuard et FRP..."
 
-echo "[+] Suppression du fichier de configuration WireGuard"
-rm -f "${WG_CONF}"
+# === Arrêter et désactiver les services ===
+systemctl stop wg-quick@wg0 || true
+systemctl disable wg-quick@wg0 || true
 
-echo "[+] Suppression des clés WireGuard"
-rm -rf "${KEY_DIR}"
+systemctl stop frps || true
+systemctl disable frps || true
+rm -f /etc/systemd/system/frps.service
 
-echo "[+] Suppression des règles iptables"
-iptables -D FORWARD -i ${VPN_INTERFACE} -j ACCEPT || true
-iptables -D FORWARD -o ${VPN_INTERFACE} -j ACCEPT || true
-iptables -t nat -D POSTROUTING -s ${VPN_NETWORK} -o ${LAN_INTERFACE} -j MASQUERADE || true
-iptables -D FORWARD -i ${VPN_INTERFACE} -d 192.168.0.0/16 -j REJECT || true
+systemctl daemon-reload
 
-echo "[+] Nettoyage des règles UFW (NAT)"
-sed -i "/-A POSTROUTING -s ${VPN_NETWORK//\//\\/} -o ${LAN_INTERFACE} -j MASQUERADE/d" /etc/ufw/before.rules
-sed -i '/\*nat/,/COMMIT/d' /etc/ufw/before.rules
+# === Supprimer les fichiers WireGuard ===
+rm -rf /etc/wireguard
 
-echo "[+] Suppression de la règle UFW pour WireGuard"
-ufw delete allow ${VPN_PORT}/udp || true
+# === Supprimer FRP ===
+rm -rf /opt/frp
 
-echo "[+] Réinitialisation UFW"
-ufw --force reset
+# === Supprimer les règles UFW spécifiques ===
+echo "[🧹] Nettoyage du pare-feu..."
+ufw delete allow 51820/udp || true
+ufw delete allow in on wg0 || true
+ufw delete allow out on wg0 || true
 
-echo "[+] Réinstallation des valeurs par défaut dans /etc/network/interfaces"
-cat <<EOF > /etc/network/interfaces
-auto lo
-iface lo inet loopback
+BLOCKED_PORTS=(22 23 3389)
+for port in "${BLOCKED_PORTS[@]}"; do
+  ufw delete deny $port || true
+done
 
-auto ${LAN_INTERFACE}
-iface ${LAN_INTERFACE} inet dhcp
-EOF
+# === Supprimer le fichier de configuration sysctl ===
+rm -f /etc/sysctl.d/99-wg-forward.conf
+sysctl -w net.ipv4.ip_forward=0
 
-echo "[+] Redémarrage du réseau"
-systemctl restart networking || true
-
-echo "[+] Suppression des paquets installés"
-apt purge -y wireguard ufw iptables-persistent fail2ban haproxy
+# === Supprimer les paquets installés ===
+echo "[🧹] Suppression des paquets installés..."
+apt purge -y wireguard ufw
 apt autoremove -y
 apt clean
 
-echo "[+] Suppression des fichiers restants"
-rm -rf /etc/wireguard
-rm -f /etc/iptables/rules.v4
-rm -f /etc/iptables/rules.v6
-rm -rf /var/log/fail2ban
-rm -rf /etc/fail2ban
+echo "[🗑] Suppression des script."
+rm add.sh
+rm remove.sh
+rm -f "${SCRIPT_PATH}"
 
-echo "[+] Réactivation des règles par défaut"
-sed -i '/^net.ipv4.ip_forward/s/1/0/' /etc/sysctl.conf
-echo 0 > /proc/sys/net/ipv4/ip_forward
+echo "[✅] Suppression complète terminée."
 
-echo ""
-echo "✅ PURGE TERMINÉE"
-echo "Le système est revenu à l'état initial. Le VPN proxy a été supprimé."
-
-# 10. Ajout du bash mère.
+echo "[✅] Installation de l'installer."
 wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/setup> start.sh
 chmod +x ./start.sh
-
-# 11. Auto-suppression
-echo "[*] Script terminé. Suppression de lui-même..."
-rm ./add.sh
-rm -- "$0"
