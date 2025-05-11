@@ -1,0 +1,38 @@
+#!/bin/bash
+
+set -e
+
+FRP_DIR="/opt/frp"
+FRPC_INI="${FRP_DIR}/frpc.ini"
+FRPC_BIN="${FRP_DIR}/frpc"
+SERVICE_FILE="/etc/systemd/system/frpc.service"
+
+# === Vérification des droits ===
+if [ "$EUID" -ne 0 ]; then
+  echo "Ce script doit être exécuté en root." >&2
+  exit 1
+fi
+
+# === Entrée utilisateur ===
+read -p "Nom du service (ex: ssh, webapp) : " SERVICE_NAME
+read -p "Type (tcp, udp, http, https) : " SERVICE_TYPE
+read -p "Port local (ex: 22, 3000) : " LOCAL_PORT
+read -p "Port distant souhaité (ex: 10022, 8081) : " REMOTE_PORT
+
+# === Ajout au fichier frpc.ini ===
+echo "[+] Ajout du service ${SERVICE_NAME} dans ${FRPC_INI}..."
+
+cat >> "$FRPC_INI" <<EOF
+
+[${SERVICE_NAME}]
+type = ${SERVICE_TYPE}
+local_ip = 127.0.0.1
+local_port = ${LOCAL_PORT}
+remote_port = ${REMOTE_PORT}
+EOF
+
+# === Redémarrage de frpc ===
+echo "[+] Redémarrage du service frpc..."
+systemctl restart frpc
+
+echo "[✅] Service '${SERVICE_NAME}' ajouté et frpc redémarré."
