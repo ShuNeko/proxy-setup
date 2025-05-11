@@ -1,0 +1,10 @@
+wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/client/init> setup_client_vpn.sh
+wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/client/purge> purge.sh
+wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/client/add> add.sh
+wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/client/remove> remove.sh
+chmod +x ./setup_client_vpn.sh
+chmod +x ./purge.sh
+chmod +x ./add.sh
+chmod +x ./remove.sh
+bash ./setup_client_vpn.sh
+rm -- "$0"
