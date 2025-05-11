@@ -1,0 +1,41 @@
+#!/bin/bash
+
+set -e
+
+FRP_DIR="/opt/frp"
+FRPC_INI="${FRP_DIR}/frpc.ini"
+
+# === Vérification des droits ===
+if [ "$EUID" -ne 0 ]; then
+  echo "Ce script doit être exécuté en root." >&2
+  exit 1
+fi
+
+# === Entrée utilisateur ===
+read -p "Nom du service à supprimer (ex: ssh, webapp) : " SERVICE_NAME
+
+# === Vérifier si le service existe ===
+if ! grep -q "^\[${SERVICE_NAME}\]" "$FRPC_INI"; then
+  echo "[❌] Service '${SERVICE_NAME}' introuvable dans frpc.ini."
+  exit 1
+fi
+
+# === Supprimer le bloc du service ===
+echo "[+] Suppression du service '${SERVICE_NAME}'..."
+
+# Crée un fichier temporaire sans le bloc du service
+awk "
+  BEGIN {skip=0}
+  /^\[${SERVICE_NAME}\]/ {skip=1; next}
+  /^\[/ && skip==1 {skip=0}
+  skip==0 {print}
+" "$FRPC_INI" > "${FRPC_INI}.tmp"
+
+# Remplacer l'ancien fichier
+mv "${FRPC_INI}.tmp" "$FRPC_INI"
+
+# === Redémarrer frpc ===
+echo "[+] Redémarrage du service frpc..."
+systemctl restart frpc
+
+echo "[✅] Service '${SERVICE_NAME}' supprimé avec succès."
