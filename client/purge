@@ -1,0 +1,59 @@
+#!/bin/bash
+
+set -e
+
+SCRIPT_PATH="$(realpath "$0")"
+WG_INTERFACE="wg0"
+WG_CONFIG="/etc/wireguard/${WG_INTERFACE}.conf"
+FRP_DIR="/opt/frp"
+FRPC_SERVICE="/etc/systemd/system/frpc.service"
+
+# === Vérification des droits ===
+if [ "$EUID" -ne 0 ]; then
+  echo "Ce script doit être exécuté en root." >&2
+  exit 1
+fi
+
+echo "[⚠️] Ce script va supprimer complètement WireGuard et FRP du système."
+read -p "Confirmer la purge complète ? (oui/non) : " CONFIRM
+if [[ "$CONFIRM" != "oui" ]]; then
+  echo "[✋] Opération annulée."
+  exit 0
+fi
+
+# === Arrêt des services ===
+echo "[🛑] Arrêt des services..."
+systemctl stop frpc || true
+systemctl stop wg-quick@$WG_INTERFACE || true
+
+# === Désactivation des services ===
+echo "[🧹] Désactivation des services..."
+systemctl disable frpc || true
+systemctl disable wg-quick@$WG_INTERFACE || true
+
+# === Suppression des fichiers ===
+echo "[🧺] Suppression des fichiers de configuration et binaires..."
+rm -rf "$FRP_DIR"
+rm -f "$FRPC_SERVICE"
+rm -f "$WG_CONFIG"
+rm -f /etc/wireguard/privatekey /etc/wireguard/publickey
+
+# === Reload systemd ===
+systemctl daemon-reexec
+systemctl daemon-reload
+
+# === Désinstallation des paquets ===
+echo "[🧽] Suppression des paquets installés (optionnel)..."
+rm remove.sh
+rm add.sh
+rm -f "${SCRIPT_PATH}"
+apt purge -y wireguard curl
+apt autoremove -y
+
+echo "[✅] Installation de l'installer."
+wget -qO- https://raw.githubusercontent.com/ShuNeko/proxy-setup/refs/heads/main/client/setup> start.sh
+chmod +x ./start.sh
+
+echo ""
+echo "[✅] Le client a été complètement purgé."
+echo "[💡] Vous pouvez relancer le script d’installation avec ./start.sh si besoin."
