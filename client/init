@@ -71,7 +71,7 @@ rm -rf frp.tar.gz frp_*
 # === Création de frpc.ini (vide pour le moment) ===
 cat > $FRP_DIR/frpc.ini <<EOF
 [common]
-server_addr = ${SERVER_IP}
+server_addr = 10.55.5.1
 server_port = ${SERVER_FRPS_PORT}
 token = ${FRP_TOKEN}
 EOF
